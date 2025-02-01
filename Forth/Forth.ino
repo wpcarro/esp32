@@ -7,7 +7,9 @@
 //   - tether to iPhone
 
 #include <Arduino.h>
+#include <ArduinoOTA.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 
 #include <vector>
 
@@ -292,10 +294,37 @@ void debug() {
 }
 
 // Main
-void setup() {
+void setup2() {
     Serial.begin(9600);
     Serial.println("ESP32 REPL");
 }
+
+void setup() {
+    Serial.begin(9600);
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.println("Connecting to Wi-Fi...");
+    }
+    Serial.println("Connected to Wi-Fi.");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+
+    ArduinoOTA.onStart([]() {
+        String type;
+        if (ArduinoOTA.getCommand() == U_FLASH) {
+            type = "sketch";
+        } else {
+            type = "filesystem";
+        }
+        Serial.println("OTA update received: " + type);
+    });
+
+    ArduinoOTA.begin();
+    Serial.println("Ready to receive OTA updates...");
+}
+
+void loop() { ArduinoOTA.handle(); }
 
 // Forth doesn't read the entire program into memory at once and then
 // parse it. It handles code line-by-line, token-by-token.
@@ -313,7 +342,7 @@ void setup() {
 //   - To be connected to Wi-Fi
 //   - To have a connected client
 // If we don't have these things, we should prefer serial.
-void loop() {
+void loop2() {
     static String line = "";
 
     // If we're preferring Telnet connections, we need to see if we
