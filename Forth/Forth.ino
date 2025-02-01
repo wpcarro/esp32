@@ -7,8 +7,16 @@
 //   - tether to iPhone
 
 #include <Arduino.h>
+#include <WiFi.h>
 
 #include <vector>
+
+// WiFi credentials ("Personal Hotspot")
+const char *ssid = "iPhone";
+const char *password = "security";
+
+WiFiServer telnetServer(23);
+WiFiClient telnetClient(23);
 
 static std::vector<int> stack;
 
@@ -167,9 +175,101 @@ void handleDigitalWrite() {
     digitalWrite(pin, val);
 }
 
+// Makes a few attempts to connect to a known Wi-Fi network.
+void handleConnectWifi() {
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("Already connected. Aborting...");
+        return;
+    }
+
+    Serial.println("Connecting to Wi-Fi...");
+    WiFi.begin(ssid, password);
+    delay(500);
+
+    // The ESP32 repeatedly tries reconnecting on its own, so calling
+    // WiFi.begin again causes problems.
+    int attempt = 0;
+    while (WiFi.status() != WL_CONNECTED && attempt < 100) {
+        if (attempt % 10 == 0) {
+            Serial.println("Polling...");
+        }
+        delay(100);
+        attempt += 1;
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("Failed to connect to Wi-Fi.");
+    } else {
+        Serial.println("Successfully connected to Wi-Fi!");
+        Serial.print("IP addr: ");
+        Serial.println(WiFi.localIP());
+    }
+}
+
+// Gracefully disconnect from Wi-Fi.
+void handleDisconnectWifi() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("Already disconnected. Aborting...");
+        return;
+    }
+
+    Serial.println("Disconnecting from Wi-Fi...");
+    WiFi.disconnect();
+
+    // Retry with backoff
+    int attempt = 0;
+    while (WiFi.status() == WL_CONNECTED && attempt < 3) {
+        int ms = pow(2, attempt) * 500;
+        Serial.print("Failed. Retrying in ");
+        Serial.print((float)ms / 1000, 2);
+        Serial.println("s...");
+        delay(ms);
+        attempt += 1;
+        WiFi.disconnect();
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("Failed to disconnect from Wi-Fi");
+    } else {
+        Serial.println("Successfully disconnected from Wi-Fi!");
+    }
+}
+
+// This starts a telnet server. It isn't that useful until you have a
+// connected client.
+void handleTelnet() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("ERR: You need to connect to Wi-Fi first. Aborting...");
+        return;
+    }
+
+    telnetServer.begin();
+    Serial.println("Listening on port 23...");
+}
+
 // Prints a newline.
-void handleCR() {
-    Serial.println();
+void handleCR() { Serial.println(); }
+
+// Prints ESP32 system information for diagnostics purposes. Eventually
+// publishing this in an OTEL format would be quite useful.
+void handleInfo() {
+    Serial.println("System Diagnostics");
+    Serial.print("Free heap: ");
+    Serial.println(ESP.getFreeHeap());
+    Serial.print("Min free heap: ");
+    Serial.println(ESP.getMinFreeHeap());
+    Serial.print("Max alloc heap: ");
+    Serial.println(ESP.getMaxAllocHeap());
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.print("Wi-Fi: Connected to \"");
+        Serial.print(ssid);
+        Serial.println("\"");
+        Serial.print("IP Address: ");
+        Serial.println(WiFi.localIP());
+    } else {
+        Serial.println("Wi-Fi: N/A");
+        Serial.println("IP Address: N/A");
+    }
 }
 
 // Example: 1000 sleep
@@ -199,10 +299,42 @@ void setup() {
 
 // Forth doesn't read the entire program into memory at once and then
 // parse it. It handles code line-by-line, token-by-token.
+//
+// Ideas:
+//   - Persist WiFi credentials
+//   - Prompt/warn on disconnect if connected over telnet
+//
+// We need logic to control where we're reading our inputs from because
+// we can read from two sources:
+//   - Serial input with Serial.read
+//   - Connected telnet client with telnetClient.read
+//
+// If we're going to read from Telnet client we need:
+//   - To be connected to Wi-Fi
+//   - To have a connected client
+// If we don't have these things, we should prefer serial.
 void loop() {
     static String line = "";
 
-    bool compile = false;
+    // If we're preferring Telnet connections, we need to see if we
+    // have a client connecting.
+    //
+    // Keep the serial port open until:
+    //   - Connected to Wi-Fi
+    //   - Telnet server is running
+    //   - Client is actually connected to our Telnet server
+    static String telnetLine = "";
+    while (telnetClient.available() > 0) {
+        char c = (char)telnetClient.read();
+        if (c == '\n' || c == '\r') {
+            telnetClient.println("ESP32 REPL (Wi-Fi)");
+            telnetLine = "";
+        } else {
+            telnetLine += c;
+        }
+        Serial.println("Telnet client available!");
+    }
+
     while (Serial.available() > 0) {
         char c = (char)Serial.read();
         if (c == '\n' || c == '\r') {
@@ -215,11 +347,6 @@ void loop() {
             auto tokens = tokenize(line);
             bool comment = false;
             for (auto &token : tokens) {
-                if (compile) {
-                    if (token == "DO") {
-                    }
-                }
-
                 // Comments
                 if (comment && token != ")") {
                     continue;
@@ -238,6 +365,8 @@ void loop() {
                     dup();
                 } else if (token == "CR") {
                     handleCR();
+                } else if (token == "info") {
+                    handleInfo();
                 } else if (token == "sleep") {
                     handleSleep();
                 } else if (token == ".") {
@@ -252,6 +381,12 @@ void loop() {
                     handleDigitalRead();
                 } else if (token == "digitalWrite") {
                     handleDigitalWrite();
+                } else if (token == "connectWifi") {
+                    handleConnectWifi();
+                } else if (token == "disconnectWifi") {
+                    handleDisconnectWifi();
+                } else if (token == "startTelnet") {
+                    handleTelnet();
                 }
                 // Try to parse the token as an integer
                 else {
