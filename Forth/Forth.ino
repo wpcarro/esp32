@@ -283,6 +283,22 @@ void handleSleep() {
     delay(ms);
 }
 
+// Buffers Serial input character-by-character until it encounters a newline at
+// which point it invokves the callback function with the buffered input.
+void onMessage(void (*callback)(const String &)) {
+    static String buffer = "";
+
+    while (Serial.available() > 0) {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r') {
+            callback(buffer);
+            buffer = "";
+        } else {
+            buffer += c;
+        }
+    }
+}
+
 // Prints the entire stack.
 void debug() {
     Serial.print("[ ");
@@ -293,12 +309,75 @@ void debug() {
     Serial.println("]");
 }
 
-// Main
-void setup2() {
-    Serial.begin(9600);
-    Serial.println("ESP32 REPL");
+// Receives a string representing all of the characters in an input buffer up
+// until a newline character was received.
+//   - Tokenize the characters
+//   - Interpret the tokens
+void handleMessage(const String &msg) {
+    // Skip full-width comments
+    if (msg[0] == '\\') {
+        return;
+    }
+
+    bool comment = false;
+    auto tokens = tokenize(msg);
+    for (auto &token : tokens) {
+        // Comments
+        if (comment && token != ")") {
+            continue;
+        } else if (token == "(") {
+            // Skip tokens until we encounter ")"
+            comment = true;
+        } else if (comment && token == ")") {
+            comment = false;
+        }
+        // Builtins
+        else if (token == "+") {
+            plus();
+        } else if (token == "*") {
+            mult();
+        } else if (token == "DUP") {
+            dup();
+        } else if (token == "CR") {
+            handleCR();
+        } else if (token == "info") {
+            handleInfo();
+        } else if (token == "sleep") {
+            handleSleep();
+        } else if (token == ".") {
+            dot();
+        } else if (token == "DROP") {
+            handleDrop();
+        } else if (token == ".s") {
+            debug();
+        } else if (token == "pinMode") {
+            handlePinMode();
+        } else if (token == "digitalRead") {
+            handleDigitalRead();
+        } else if (token == "digitalWrite") {
+            handleDigitalWrite();
+        } else if (token == "connectWifi") {
+            handleConnectWifi();
+        } else if (token == "disconnectWifi") {
+            handleDisconnectWifi();
+        } else if (token == "startTelnet") {
+            handleTelnet();
+        }
+        // Try to parse the token as an integer
+        else {
+            int parsed = parseInt(token);
+            if (parsed == -1) {
+                Serial.print("ERR: Unsupported token \"");
+                Serial.print(token);
+                Serial.println("\"");
+            } else {
+                stack.push_back(parsed);
+            }
+        }
+    }
 }
 
+// Main
 void setup() {
     Serial.begin(9600);
 
@@ -332,17 +411,7 @@ void setup() {
 
     ArduinoOTA.begin();
     Serial.println("Ready to receive OTA updates...");
-}
-
-void loop() {
-    ArduinoOTA.handle();
-
-    // Wi-Fi status LED:
-    if (WiFi.status() != WL_CONNECTED) {
-        digitalWrite(32, LOW);
-    } else {
-        digitalWrite(32, HIGH);
-    }
+    Serial.println("ESP32 REPL");
 }
 
 // Forth doesn't read the entire program into memory at once and then
@@ -361,96 +430,15 @@ void loop() {
 //   - To be connected to Wi-Fi
 //   - To have a connected client
 // If we don't have these things, we should prefer serial.
-void loop2() {
-    static String line = "";
+void loop() {
+    ArduinoOTA.handle();
 
-    // If we're preferring Telnet connections, we need to see if we
-    // have a client connecting.
-    //
-    // Keep the serial port open until:
-    //   - Connected to Wi-Fi
-    //   - Telnet server is running
-    //   - Client is actually connected to our Telnet server
-    static String telnetLine = "";
-    while (telnetClient.available() > 0) {
-        char c = (char)telnetClient.read();
-        if (c == '\n' || c == '\r') {
-            telnetClient.println("ESP32 REPL (Wi-Fi)");
-            telnetLine = "";
-        } else {
-            telnetLine += c;
-        }
-        Serial.println("Telnet client available!");
+    // Wi-Fi status LED:
+    if (WiFi.status() != WL_CONNECTED) {
+        digitalWrite(32, LOW);
+    } else {
+        digitalWrite(32, HIGH);
     }
 
-    while (Serial.available() > 0) {
-        char c = (char)Serial.read();
-        if (c == '\n' || c == '\r') {
-            // Skip full-width comments
-            if (line[0] == '\\') {
-                line = "";
-                continue;
-            }
-
-            auto tokens = tokenize(line);
-            bool comment = false;
-            for (auto &token : tokens) {
-                // Comments
-                if (comment && token != ")") {
-                    continue;
-                } else if (token == "(") {
-                    // Skip tokens until we encounter ")"
-                    comment = true;
-                } else if (comment && token == ")") {
-                    comment = false;
-                }
-                // Builtins
-                else if (token == "+") {
-                    plus();
-                } else if (token == "*") {
-                    mult();
-                } else if (token == "DUP") {
-                    dup();
-                } else if (token == "CR") {
-                    handleCR();
-                } else if (token == "info") {
-                    handleInfo();
-                } else if (token == "sleep") {
-                    handleSleep();
-                } else if (token == ".") {
-                    dot();
-                } else if (token == "DROP") {
-                    handleDrop();
-                } else if (token == ".s") {
-                    debug();
-                } else if (token == "pinMode") {
-                    handlePinMode();
-                } else if (token == "digitalRead") {
-                    handleDigitalRead();
-                } else if (token == "digitalWrite") {
-                    handleDigitalWrite();
-                } else if (token == "connectWifi") {
-                    handleConnectWifi();
-                } else if (token == "disconnectWifi") {
-                    handleDisconnectWifi();
-                } else if (token == "startTelnet") {
-                    handleTelnet();
-                }
-                // Try to parse the token as an integer
-                else {
-                    int parsed = parseInt(token);
-                    if (parsed == -1) {
-                        Serial.print("ERR: Unsupported token \"");
-                        Serial.print(token);
-                        Serial.println("\"");
-                    } else {
-                        stack.push_back(parsed);
-                    }
-                }
-            }
-            line = "";
-        } else {
-            line += c;
-        }
-    }
+    onMessage(handleMessage);
 }
