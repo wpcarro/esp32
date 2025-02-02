@@ -301,11 +301,21 @@ void setup2() {
 
 void setup() {
     Serial.begin(9600);
+
+    // Wi-Fi status LED:
+    //   - ON: stable
+    //   - OFF: blinking
+    pinMode(32, OUTPUT);
+
     WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED) {
-        delay(1000);
         Serial.println("Connecting to Wi-Fi...");
+        digitalWrite(32, HIGH);
+        delay(500);
+        digitalWrite(32, LOW);
+        delay(500);
     }
+    digitalWrite(32, HIGH);
     Serial.println("Connected to Wi-Fi.");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
@@ -324,7 +334,16 @@ void setup() {
     Serial.println("Ready to receive OTA updates...");
 }
 
-void loop() { ArduinoOTA.handle(); }
+void loop() {
+    ArduinoOTA.handle();
+
+    // Wi-Fi status LED:
+    if (WiFi.status() != WL_CONNECTED) {
+        digitalWrite(32, LOW);
+    } else {
+        digitalWrite(32, HIGH);
+    }
+}
 
 // Forth doesn't read the entire program into memory at once and then
 // parse it. It handles code line-by-line, token-by-token.
