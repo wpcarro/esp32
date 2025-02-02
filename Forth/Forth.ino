@@ -11,22 +11,24 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
+#if defined(ESP32)
+#include <AsyncTCP.h>
+#endif
+#include <ESPAsyncWebServer.h>
+#include <WebSerial.h>
+
 #include <vector>
 
 // WiFi credentials ("Personal Hotspot")
 const char *ssid = "iPhone";
 const char *password = "security";
 
+AsyncWebServer server(80);
+
 WiFiServer telnetServer(23);
 WiFiClient telnetClient(23);
 
 static std::vector<int> stack;
-
-void interpret(const String &token) {
-    // Try integer
-    Serial.print("Unknown word: ");
-    Serial.println(token);
-}
 
 std::vector<String> tokenize(const String &line) {
     std::vector<String> result;
@@ -98,6 +100,16 @@ int pop() {
     return x;
 }
 
+void print(const String &msg) {
+    WebSerial.print(msg);
+    Serial.print(msg);
+}
+
+void println(const String &msg) {
+    WebSerial.println(msg);
+    Serial.println(msg);
+}
+
 //////////////////////////////////////////////////////////////
 // Builtins
 //////////////////////////////////////////////////////////////
@@ -125,19 +137,19 @@ void dup() {
 // Pops from the top of the stack and prints the result.
 void dot() {
     if (stack.size() == 0) {
-        Serial.println("EMPTY");
+        println("EMPTY");
         return;
     }
     int x = pop();
-    Serial.print(x, DEC);
-    Serial.println();
+    print(String(x));
+    print("\n");
 }
 
 // Same as "." but doesn't print the value after popping it off of the
 // stack.
 void handleDrop() {
     if (stack.size() == 0) {
-        Serial.println("ERR: Just tried to DROP from an empty stack");
+        println("ERR: Just tried to DROP from an empty stack");
         return;
     }
     pop();
@@ -152,13 +164,13 @@ void handleDrop() {
 void handlePinMode() {
     int mode = pop();
     int pin = pop();
-    Serial.print("Setting ");
-    Serial.print(pin, DEC);
-    Serial.print(" to ");
-    Serial.println(mode == OUTPUT   ? "OUTPUT"
-                   : mode == INPUT  ? "INPUT"
-                   : mode == PULLUP ? "PULLUP"
-                                    : "<Unsupported>");
+    print("Setting ");
+    print(String(pin));
+    print(" to ");
+    println(mode == OUTPUT   ? "OUTPUT"
+            : mode == INPUT  ? "INPUT"
+            : mode == PULLUP ? "PULLUP"
+                             : "<Unsupported>");
     pinMode(pin, mode);
 }
 
@@ -180,11 +192,11 @@ void handleDigitalWrite() {
 // Makes a few attempts to connect to a known Wi-Fi network.
 void handleConnectWifi() {
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("Already connected. Aborting...");
+        println("Already connected. Aborting...");
         return;
     }
 
-    Serial.println("Connecting to Wi-Fi...");
+    println("Connecting to Wi-Fi...");
     WiFi.begin(ssid, password);
     delay(500);
 
@@ -193,94 +205,92 @@ void handleConnectWifi() {
     int attempt = 0;
     while (WiFi.status() != WL_CONNECTED && attempt < 100) {
         if (attempt % 10 == 0) {
-            Serial.println("Polling...");
+            println("Polling...");
         }
         delay(100);
         attempt += 1;
     }
 
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Failed to connect to Wi-Fi.");
+        println("Failed to connect to Wi-Fi.");
     } else {
-        Serial.println("Successfully connected to Wi-Fi!");
-        Serial.print("IP addr: ");
-        Serial.println(WiFi.localIP());
+        println("Successfully connected to Wi-Fi!");
+        print("IP addr: ");
+        println(String(WiFi.localIP()));
     }
 }
 
 // Gracefully disconnect from Wi-Fi.
 void handleDisconnectWifi() {
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Already disconnected. Aborting...");
+        println("Already disconnected. Aborting...");
         return;
     }
 
-    Serial.println("Disconnecting from Wi-Fi...");
+    println("Disconnecting from Wi-Fi...");
     WiFi.disconnect();
 
     // Retry with backoff
     int attempt = 0;
     while (WiFi.status() == WL_CONNECTED && attempt < 3) {
         int ms = pow(2, attempt) * 500;
-        Serial.print("Failed. Retrying in ");
-        Serial.print((float)ms / 1000, 2);
-        Serial.println("s...");
+        print("Failed. Retrying in ");
+        print(String((float)ms / 1000));
+        println("s...");
         delay(ms);
         attempt += 1;
         WiFi.disconnect();
     }
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("Failed to disconnect from Wi-Fi");
+        println("Failed to disconnect from Wi-Fi");
     } else {
-        Serial.println("Successfully disconnected from Wi-Fi!");
+        println("Successfully disconnected from Wi-Fi!");
     }
-}
-
-// This starts a telnet server. It isn't that useful until you have a
-// connected client.
-void handleTelnet() {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("ERR: You need to connect to Wi-Fi first. Aborting...");
-        return;
-    }
-
-    telnetServer.begin();
-    Serial.println("Listening on port 23...");
 }
 
 // Prints a newline.
-void handleCR() { Serial.println(); }
+void handleCR() { print("\n"); }
 
 // Prints ESP32 system information for diagnostics purposes. Eventually
 // publishing this in an OTEL format would be quite useful.
 void handleInfo() {
-    Serial.println("System Diagnostics");
-    Serial.print("Free heap: ");
-    Serial.println(ESP.getFreeHeap());
-    Serial.print("Min free heap: ");
-    Serial.println(ESP.getMinFreeHeap());
-    Serial.print("Max alloc heap: ");
-    Serial.println(ESP.getMaxAllocHeap());
+    println("System Diagnostics");
+    print("Free heap: ");
+    println(String(ESP.getFreeHeap()));
+    print("Min free heap: ");
+    println(String(ESP.getMinFreeHeap()));
+    print("Max alloc heap: ");
+    println(String(ESP.getMaxAllocHeap()));
 
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.print("Wi-Fi: Connected to \"");
-        Serial.print(ssid);
-        Serial.println("\"");
-        Serial.print("IP Address: ");
-        Serial.println(WiFi.localIP());
+        print("Wi-Fi: Connected to \"");
+        print(ssid);
+        println("\"");
+        print("IP Address: ");
+        println(String(WiFi.localIP()));
     } else {
-        Serial.println("Wi-Fi: N/A");
-        Serial.println("IP Address: N/A");
+        println("Wi-Fi: N/A");
+        println("IP Address: N/A");
     }
 }
 
 // Example: 1000 sleep
 void handleSleep() {
     int ms = pop();
-    Serial.print("Sleeping for ");
-    Serial.print(ms, DEC);
-    Serial.println("ms...");
+    print("Sleeping for ");
+    print(String(ms));
+    println("ms...");
     delay(ms);
+}
+
+// Prints the entire stack.
+void debug() {
+    print("[ ");
+    for (auto &x : stack) {
+        print(String(x));
+        print(" ");
+    }
+    println("]");
 }
 
 // Buffers Serial input character-by-character until it encounters a newline at
@@ -290,23 +300,13 @@ void onMessage(void (*callback)(const String &)) {
 
     while (Serial.available() > 0) {
         char c = Serial.read();
-        if (c == '\n' || c == '\r') {
+        if (c == '\n' || '\r') {
             callback(buffer);
             buffer = "";
         } else {
             buffer += c;
         }
     }
-}
-
-// Prints the entire stack.
-void debug() {
-    Serial.print("[ ");
-    for (auto &x : stack) {
-        Serial.print(x, DEC);
-        Serial.print(" ");
-    }
-    Serial.println("]");
 }
 
 // Receives a string representing all of the characters in an input buffer up
@@ -360,21 +360,48 @@ void handleMessage(const String &msg) {
             handleConnectWifi();
         } else if (token == "disconnectWifi") {
             handleDisconnectWifi();
-        } else if (token == "startTelnet") {
-            handleTelnet();
         }
         // Try to parse the token as an integer
         else {
             int parsed = parseInt(token);
             if (parsed == -1) {
-                Serial.print("ERR: Unsupported token \"");
-                Serial.print(token);
-                Serial.println("\"");
+                print("ERR: Unsupported token \"");
+                print(token);
+                println("\"");
             } else {
                 stack.push_back(parsed);
             }
         }
     }
+}
+
+void debugPrint(const String &msg) {
+    Serial.print("Debug: \"");
+    for (int i = 0; i < msg.length(); i++) {
+        char c = msg.charAt(i);
+        // Check if the character is printable
+        if (isPrintable(c)) {
+            Serial.print(c);
+        } else {
+            // For known control characters, print a recognizable escape
+            // sequence.
+            if (c == '\r') {
+                Serial.print("\\r");
+            } else if (c == '\n') {
+                Serial.print("\\n");
+            } else if (c == '\t') {
+                Serial.print("\\t");
+            } else {
+                // Otherwise, print the hex value.
+                Serial.print("\\x");
+                if ((unsigned char)c < 16) Serial.print("0");
+                Serial.print(String((unsigned char)c, HEX));
+            }
+        }
+    }
+    Serial.print("\" (len ");
+    Serial.print(msg.length());
+    Serial.println(")");
 }
 
 // Main
@@ -399,6 +426,29 @@ void setup() {
     Serial.println("Connected to Wi-Fi.");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", "Hello, world!");
+    });
+
+    WebSerial.begin(&server);
+    WebSerial.onMessage([](uint8_t *data, size_t len) {
+        // Collect the string
+        String msg = "";
+        for (size_t i = 0; i < len; i += 1) {
+            char c = char(data[i]);
+
+            // Ignore newlines and carriage returns
+            if (data[i] != 0 && c != '\n' && c && '\r') {
+                msg += c;
+            }
+        }
+        debugPrint(msg);
+        handleMessage(msg);
+    });
+
+    // Start the server
+    server.begin();
 
     ArduinoOTA.onStart([]() {
         String type;
@@ -442,4 +492,6 @@ void loop() {
     }
 
     onMessage(handleMessage);
+
+    WebSerial.loop();
 }
